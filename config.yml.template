@@ -1,0 +1,12 @@
+# Network Scan info
+ip_range: 192.168.1.0/24            # IP Range to ping sweep for devices
+scan_frequency: 60                  # Scan every x seconds
+
+# telegram
+telegram_token: YOUR_KEY
+telegram_chat_id: YOUR_CHAT_ID
+
+# Initial State params
+bucket_name: Presence               # Your Initial State bucket
+bucket_key: presence                # Your Initial State Bucket Key
+access_key: CHANGE_ME_TO_YOUR_KEY   # Your Initial State Key
