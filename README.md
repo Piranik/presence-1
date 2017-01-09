@@ -1,7 +1,11 @@
-This project is really two main components: 1) Ping sweep detection of new Hosts on your network and 2) Telegram notification bot to let you know a new host appeared ASAP.
+This project is really two main components:
+1) Ping sweep detection of new Hosts on your network and
+2) Telegram notification bot to let you know and take action when a new host appears.
 
+Detection:
 Ping sweep (NMAP) local network keeping track of known hosts based on MAC. When a new MAC addresses is detected, log the IP/MAC and MAC Vendor to YAML file and notify me via Telegram bot.
 
+Telegram Bot:
 When admin receives a text message he can reply to the Bot to give that new host a proper name. The thought is that you receive the update in near real-time and you know who/what was just plugged or Wifi attached to your network so you name it right away.
 
 TODO:

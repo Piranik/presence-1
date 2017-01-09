@@ -28,13 +28,18 @@ with open(config_file, 'r') as readfile:
 
 def read_hosts_file(hosts_file):
 
-    # Get list of known/seen MAC addresses
+    # Get list of known/unknown MAC addresses
     with open(hosts_file, 'r') as readfile:
         hosts = yaml.safe_load(readfile)
 
     debug("Known MAC - Hosts:")
-    for mac in hosts['known']:
-        debug("\t%s %s" % (mac, hosts['known'][mac]))
+
+    try:
+        for mac in hosts['known']:
+            debug("\t%s %s" % (mac, hosts['known'][mac]))
+    except:
+        debug("No known hosts")
+        hosts = {'known': {}}
 
     return hosts
 
@@ -113,22 +118,38 @@ def find_active_macs(ip_range):
         args = shlex.split(nmap)
         debug("Running: %s" % args)
         nmap_output = subprocess.check_output(args, shell=True)
-        debug(nmap_output)
 
         split_text = nmap_output.split('Nmap scan report for ')[1:]
 
         for line in split_text:
+            #print line
+            (ip, hostname, mac, mac_vendor) = ('','','','')
             # Nmap scan report for 192.168.1.13\n Host is up (0.034s latency).\n MAC Address: 60:38:E0:62:40:95 (Unknown)
-            match = re.match(r"^([\d.]+).*MAC Address: ([\dA-Fa-f:]+) \((.*)\)", line, re.DOTALL)
-            # Match group:  1-IP  2-MAC  3-MAC Vendor
+
+            # This will match if NMAP is able to discover a hostname ... if not then next match will fire
+            match = re.search(r"^([^\d].*)\((\d+\.\d+\.\d+\.\d+)\).*MAC Address: ([\dA-Fa-f:]+) \((.*)\)", line, re.DOTALL)
             if match:
-                debug( match.group(2), match.group(1), match.group(3))
-                macs_found[match.group(2)] =  match.group(1) +' | ' + match.group(3) + ' | ' + time.strftime("%c")
+                # print "YES"
+                # print "** ", match.group(1,2,3,4)
+                (hostname, ip,mac, mac_vendor) = match.group(1,2,3,4)
+                macs_found[mac] =  '%s | %s | %s | %s | %s' % (hostname, mac_vendor, ip, time.strftime("%c"), time.strftime("%c"))
+
+            # This will match if no hostname found in NMAP, it starts with IP
+            match = re.search(r"^(\d+\.\d+\.\d+\.\d+).*MAC Address: ([\dA-Fa-f:]+) \((.*)\)", line, re.DOTALL)
+            if match:
+                # print "YES"
+                # print "** ", match.group(1,2,3)
+                (ip, mac, mac_vendor) = match.group(1,2,3)
+                macs_found[mac] =  ' | %s  | %s | %s | %s' % (mac_vendor, ip, time.strftime("%c"), time.strftime("%c") )
+
+
+
+        #print macs_found
         return macs_found
 
 def write_yaml_hosts(hosts, hosts_file):
     with open(hosts_file, 'w') as outfile:
-        yaml.dump(hosts, outfile, default_flow_style=False)
+        yaml.dump(hosts, outfile, width=1000, default_flow_style=False)
 
 # Main thread
 
@@ -139,10 +160,10 @@ if __name__ == '__main__':
             # Perform NMAP ping sweep to find active hosts/macs
             macs_found = find_active_macs(cfg['ip_range'])
 
-            # Read in known/seen MACs from file
+            # Read in known/unknown MACs from file
             hosts = read_hosts_file(hosts_file)
 
-            print "Found %d MACs" % len(macs_found)
+            print "Found %d active MACs" % len(macs_found)
 
             for mac in macs_found:
                 if mac in hosts['known']:
@@ -150,17 +171,17 @@ if __name__ == '__main__':
                 else:
                     # MAC is not listed in known_hosts.yml under "known"
 
-                    if 'seen' not in  hosts or not hosts['seen']: # initialize if not present (ugly!)
-                        hosts['seen'] = {}
+                    if 'unknown' not in  hosts or not hosts['unknown']: # initialize if not present (ugly!)
+                        hosts['unknown'] = {}
 
-                    if mac in hosts['seen']:
-                        # MAC is unknown (unlabled in known_hosts.yml) but has been seen before
-                        print "Seen :    ", mac
+                    if mac in hosts['unknown']:
+                        # MAC is unknown (unlabled in known_hosts.yml) but has been unknown before
+                        print "unknown :    ", mac
                     else:
                         desc = mac + ' | ' + macs_found[mac]
                         print "Unknown : %s" % (desc)
                         telegrambot.send_to_telegram(desc, cfg['telegram_token'], cfg['telegram_chat_id'])
-                        hosts['seen'][mac] = macs_found[mac]
+                        hosts['unknown'][mac] = macs_found[mac]
 
                     write_yaml_hosts(hosts, hosts_file)
 
