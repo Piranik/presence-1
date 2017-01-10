@@ -17,6 +17,7 @@ import datetime
 hosts_file  = 'known_hosts.yml'
 config_file = 'config.yml'
 log_level = logging.INFO
+deliminator = ' | '
 #re_date = re.compile(r"")
 
 logging.basicConfig(stream=sys.stderr, level=log_level)
@@ -31,70 +32,7 @@ with open(config_file, 'r') as readfile:
 
 # Initialize the Initial State streamer
 # Be sure to add your unique access key to config
-streamer = Streamer(bucket_name=cfg['bucket_name'], bucket_key=cfg['bucket_name'], access_key=cfg['access_key'])
-
-# Function that checks for device presence
-def whosHere(i):
-
-    # 30 second pause to allow main thread to finish arp-scan and populate output
-    sleep(30)
-
-    # Loop through checking for devices and counting if they're not present
-    while True:
-
-        # Exits thread if Keyboard Interrupt occurs
-        if stop == True:
-            print "Exiting Thread"
-            exit()
-        else:
-            pass
-
-        # If a listed device address is present print and stream
-        if address[i] in output:
-            print(occupant[i] + "'s device is connected to your network")
-            if presentSent[i] == 0:
-                # Stream that device is present
-                streamer.log(occupant[i],":office:")
-                streamer.flush()
-                print(occupant[i] + " present streamed")
-                # Reset counters so another stream isn't sent if the device
-                # is still present
-                firstRun[i] = 0
-                presentSent[i] = 1
-                notPresentSent[i] = 0
-                counter[i] = 0
-                sleep(900)
-            else:
-                # If a stream's already been sent, just wait for 15 minutes
-                counter[i] = 0
-                sleep(900)
-        # If a listed device address is not present, print and stream
-        else:
-            print(occupant[i] + "'s device is not present")
-            # Only consider a device offline if it's counter has reached 30
-            # This is the same as 15 minutes passing
-            if counter[i] == 30 or firstRun[i] == 1:
-                firstRun[i] = 0
-                if notPresentSent[i] == 0:
-                    # Stream that device is not present
-                    streamer.log(occupant[i],":no_entry_sign::office:")
-                    streamer.flush()
-                    print(occupant[i] + " not present streamed")
-                    # Reset counters so another stream isn't sent if the device
-                    # is still present
-                    notPresentSent[i] = 1
-                    presentSent[i] = 0
-                    counter[i] = 0
-                else:
-                    # If a stream's already been sent, wait 30 seconds
-                    counter[i] = 0
-                    sleep(30)
-            # Count how many 30 second intervals have happened since the device
-            # disappeared from the network
-            else:
-                counter[i] = counter[i] + 1
-                print(occupant[i] + "'s counter at " + str(counter[i]))
-                sleep(30)
+#streamer = Streamer(bucket_name=cfg['bucket_name'], bucket_key=cfg['bucket_name'], access_key=cfg['access_key'])
 
 
 def write_yaml_hosts(hosts, hosts_file):
@@ -119,19 +57,17 @@ class Device():
         #print "Creating new Device: ", mac, device_string
 
         self.mac = mac
-        temp = map(str.strip, device_string.split('|')) # Remove trailing spaces
+        temp = map(str.strip, device_string.split(deliminator)) # Remove trailing spaces
         temp = map(str.lstrip, temp)    # Remove leading spaces
         (self.hostname, self.mac_vendor, self.ip, self.first_date, self.last_date) = temp
 
-    # def __init__(self, mac, hostname, mac_vendor, ip):
-    #     self.hostname = hostname
-    #     self.mac = mac
-    #     self.mac_vendor = mac_vendor
-    #     self.ip = ip
-
     def __str__(self):
         arr = [self.hostname, self.mac_vendor, self.ip, str(self.first_date), str(self.last_date)]
-        return '|'.join(arr)
+        return self.mac + ': ' + deliminator.join(arr)
+
+    def data(self):
+        arr = [self.hostname, self.mac_vendor, self.ip, str(self.first_date), str(self.last_date)]
+        return  deliminator.join(arr)
 
     def print_verbose(self):
         print "\t'"   + self.mac + "'"
@@ -155,14 +91,12 @@ class Device():
         return (datetime.datetime.strptime(self.last_date, '%x %X') - datetime.datetime.strptime(self.first_date, '%x %X'))
 
     def update(self, new_device_info):
-        self.last_date = str(datetime.datetime.now())[:-7] # strip microseconds
+        self.last_date = str(datetime.datetime.now())[:-10] # strip microseconds
         self.ip = new_device_info.ip
-
-
 
 class Monitor_Devices():
     '''Track Device (by MAC Address) on your Network'''
-    known_hosts = {}  # Dict of 'mac':Device()
+    hosts = {'known':{}, 'unknown':{}, 'new':{} }  # Dict of 'mac':Device() ... {'known:{}, 'unknown':{}, 'new':{}}
     nmap_discovered_hosts = {}
     new_hosts = {}
     config_file = 'config.yml'
@@ -191,55 +125,62 @@ class Monitor_Devices():
         '''Get list of known/unknown MAC addresses'''
 
         with open(self.known_hosts_file, 'r') as readfile:
-            self.known_hosts = {}  # Wipe old before refreshing
-            hosts = yaml.safe_load(readfile)
+            self.hosts = {}  # Wipe old before refreshing
+            self.hosts = yaml.safe_load(readfile)
 
-            try:
-                for mac in hosts['known']:
-                    #print mac, hosts['known'][mac]
-                    self.known_hosts[mac] = Device(mac, hosts['known'][mac])
-            except Exception as e:
-                print "Error: Maybe no 'known' hosts in file? ", e
-                pass
+            # If a certain required state isn't found, initialize to {} to avoid key errors later
+            if not self.hosts:
+                self.hosts = {}
 
-            try:
-                for mac in hosts['unknown']:
-                    self.known_hosts[mac] = Device(mac, hosts['unknown'][mac])
-            except:
-                print "Error: Maybe no 'unknown' hosts in file?"
-                pass
+            # Convert each Yaml string line to a Device
+            for known_state in self.hosts:
+                if self.hosts[known_state] == None: # If not "None"
+                    self.hosts[known_state] = {}
+
+                    for mac in self.hosts[known_state]:
+                        self.hosts[known_state][mac] = Device(mac, self.hosts[known_state][mac])
+
+            for known_state in ['known','unknown','new']:
+                if  known_state not in self.hosts:
+                    self.hosts[known_state] = {}
 
     def dump_hosts_file(self):
         temp = {}
-        for mac in self.known_hosts:
-            temp[mac] = str(self.known_hosts[mac])
+        for known_state in self.hosts:
+            temp[known_state] = {}
+            for mac in self.hosts[known_state]:
+                temp[known_state][mac] = self.hosts[known_state][mac].data()
 
-        # with open(hosts_file, 'w') as outfile:
-        print yaml.dump(temp, width=1000, default_flow_style=False)
+        with open(hosts_file, 'w') as outfile:
+            yaml.dump(temp, outfile, width=1000, default_flow_style=False)
 
 
-    def print_hosts(self, host_dict, prepend="\t"):
-        '''Generic printing of MAC: DETAIL_STRING'''
-        for mac in host_dict:
-            print prepend, host_dict[mac]
+    def print_specific_hosts(self, known_state='known', verbose=True, prepend="\t"):
+        if not self.hosts[known_state]:
+            print prepend, "No hosts"
+            return
 
-    def print_hosts_brief(self, host_dict, prepend="\t"):
-        for mac in host_dict:
-            print prepend, mac, host_dict[mac].hostname
+        for mac in self.hosts[known_state]:
+            if verbose:
+                print prepend, self.hosts[known_state][mac]
+            else:
+                print prepend, mac, host_dict[mac].hostname
 
-    def print_hosts_verbose(self, host_dict):
-        for mac in host_dict:
-            host_dict[mac].print_verbose()
 
-    def print_known_hosts(self):
-        self.print_hosts(self.known_hosts)
-
-    def print_nmap_hosts(self):
-        self.print_hosts(self.nmap_discovered_hosts)
-
+    def print_hosts(self, known_state=None, verbose=True):
+        '''Printing of specific or all hosts. Format: MAC: DETAIL_STRING'''
+        if known_state:
+            self.print_specific_hosts(known_state, verbose=verbose)
+        else:
+            for known_state in self.hosts:
+                print known_state
+                self.print_specific_hosts(known_state, verbose=verbose)
 
     def nmap_hosts(self):
+        '''Nmap ping sweep defined IP Range, update last_date on known devices
+            add any unknown devices'''
         macs_found = {}
+        self.new_hosts = {}  # Wipe old before refreshing
 
         nmap = "nmap -sP  %s" % self.ip_range
         args = shlex.split(nmap)
@@ -258,7 +199,6 @@ class Monitor_Devices():
                 (hostname, ip,mac, mac_vendor) = match.group(1,2,3,4)
                 #macs_found[mac] =  '%s | %s | %s | %s | %s' % (hostname, mac_vendor, ip, time.strftime("%c"), time.strftime("%c"))
 
-
             # This will match if no hostname found in NMAP, it starts with IP
             match = re.search(r"^(\d+\.\d+\.\d+\.\d+).*MAC Address: ([\dA-Fa-f:]+) \((.*)\)", line, re.DOTALL)
             if match:
@@ -267,14 +207,21 @@ class Monitor_Devices():
                 #self.nmap_discovered_hosts[mac] = Device(mac, macs_found[mac])
 
             if mac:     # If we matched the line and have info
-                detail_string =  '%s | %s | %s | %s | %s' % (hostname, mac_vendor, ip, time.strftime("%c"), time.strftime("%c"))
+                detail_string =  '%s | %s | %s | %s | %s' % (hostname, mac_vendor, ip, str(datetime.datetime.now())[:-10], str(datetime.datetime.now())[:-10])
                 macs_found[mac] = detail_string
-                self.nmap_discovered_hosts[mac] = Device(mac, detail_string)
+                new_device = Device(mac, detail_string)
+                self.nmap_discovered_hosts[mac] = new_device
 
-                if mac not in self.known_hosts:
-                    new_hosts[mac] = Device(mac, detail_string)
-                else:
-                    self.known_hosts[mac].update(Device(mac, detail_string))
+                found = False
+                # If known then update IP/last_date ... else add to known and new list
+                for known_state in self.hosts:
+                    if mac in self.hosts[known_state]:
+                        self.hosts[known_state][mac].update(new_device)
+                        found = True
+
+                if not found:
+                    self.hosts['new'][mac] = new_device
+                    self.hosts['unknown'][mac] = new_device
 
 
 # TODO nmap should update known last timestamps
@@ -284,16 +231,16 @@ if __name__ == '__main__':
     monitor = Monitor_Devices('config.yml')
     monitor.read_hosts_file()
     print "Known Hosts:"
-    monitor.print_known_hosts()
+    monitor.print_hosts(known_state='known')
 
-    for h in monitor.known_hosts:
-        monitor.known_hosts[h].print_verbose()
+    # for h in monitor.known_hosts:
+    #     monitor.known_hosts[h].print_verbose()
+    #
+    # exit()
 
-    exit()
     monitor.nmap_hosts()
     print "NMAP Hosts:"
-    monitor.print_nmap_hosts()
-
+    monitor.print_hosts(known_state='new')
     monitor.dump_hosts_file()
     #print "NEW MACS: ", monitor.new_hosts()
 
